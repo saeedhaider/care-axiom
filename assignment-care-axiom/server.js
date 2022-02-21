@@ -1,5 +1,7 @@
 const express = require("express");
+const request = require("request");
 const axios = require("axios");
+const cheerio = require('cheerio');
 const async = require("async");
 
 const bodyValidator = require("./middlewares/bodyValidatorMiddleware");
@@ -9,51 +11,62 @@ const constructUserFeedBack = require("./common/userFeedBack");
 const app = express();
 const port = 3000;
 
-app.get("/I/want/title/promise", bodyValidator, async (req, res) => {
+app.get("/I/want/title/promise", bodyValidator, (req, res) => {
   try {
     let listOfTitles = [];
+    const { addresses } = req;
+    let totalAddresses = addresses.length;
 
-    const { address } = req;
-    listOfTitles = await Promise.all(
-      address.map(async (address) => {
-        const { data } = await axios.get(address);
-        // Find title tag/value
-        const title = data.match("<title>(.*?)</title>")[1];
-        if (title) return `<li>${address} - ${title} </li>`;
-      })
-    );
+    const promises = addresses.map(address => axios.get(address));
 
-    // Sending response back
-    res.status(200).send(constructUserFeedBack(listOfTitles));
+    Promise.all(promises).then((results) => {
+      results.forEach((result) => {
+        const $ = cheerio.load(result.data);
+        const title = $("title").text();
+        if (title) listOfTitles.push(`<li>${addresses} - ${title} </li>`);
+
+        setTimeout(function () {
+          totalAddresses -= 1;
+          if (totalAddresses === 0) {
+              // return the response when fetch the titles of all addresses
+              res.status(200).send(constructUserFeedBack(listOfTitles));
+          }
+        }, 1);
+      });
+    }).catch(err => {
+      throw err;
+    });
+  
   } catch (error) {
-    console.log(error);
     res.status(400).send("Something went wrong");
   }
 });
 
-app.get("/I/want/title/callback", bodyValidator, async (req, res) => {
+app.get("/I/want/title/callback", bodyValidator, (req, res) => {
   try {
     let listOfTitles = [];
-    let promises = [];
-    const { address } = req;
+    const { addresses } = req;
+    let totalAddresses = addresses.length;
 
-    listOfTitles = address.map(async (url) => {
-      promises.push(
-        axios
-          .get(url)
-          .then(({ data }) => {
-            const title = data.match("<title>(.*?)</title>")[1];
-            listOfTitles.push(`<li>${url} - ${title} </li>`);
-          })
-          .catch((error) => {
-            console.log(error);
-            listOfTitles.push(`<li>${url} - NO RESPONSE </li>`);
-          })
-      );
+    addresses.forEach(address => {
+      // get the html of webpage and grab title tag
+      request.get({ url: address }, (error, response) => {
+        if (!error && response.statusCode == 200) {
+          const $ = cheerio.load(response.body);
+          const title = $("title").text();
+          if (title) listOfTitles.push(`<li>${address} - ${title} </li>`);
+
+          setTimeout(function () {
+            totalAddresses -= 1;
+            if (totalAddresses === 0) {
+                // return the response when fetch the titles of all addresses
+                res.status(200).send(constructUserFeedBack(listOfTitles));
+            }
+          }, 1);
+        }
+       });
     });
 
-    await Promise.all(promises);
-    res.status(200).send(constructUserFeedBack(listOfTitles));
   } catch (err) {
     res.status(400).json("Something went wrong");
   }
@@ -61,25 +74,14 @@ app.get("/I/want/title/callback", bodyValidator, async (req, res) => {
 
 app.get("/I/want/title/async", bodyValidator, async (req, res) => {
   try {
-    const { address } = req;
-    let listOfTitles = [];
-    const promises = [];
-
-    async.each(address, (address) => {
-      promises.push(
-        axios
-          .get(address)
-          .then(({ data }) => {
-            const title = data.match("<title>(.*?)</title>")[1];
-            listOfTitles.push(`<li>${address} - ${title} </li>`);
-          })
-          .catch((error) => {
-            console.log(error);
-            listOfTitles.push(`<li>${address} - NO RESPONSE </li>`);
-          })
-      );
+    const { addresses } = req;
+    const listOfTitles = await async.map(addresses, async (address) => {
+      const {data} = await axios.get(address);
+      const $ = cheerio.load(data);
+      const title = $("title").text();
+      return `<li>${address} - ${title} </li>`;
     });
-    await Promise.all(promises);
+
     res.status(200).send(constructUserFeedBack(listOfTitles));
   } catch (error) {
     console.log("error", error);
